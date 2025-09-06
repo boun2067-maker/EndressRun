@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<title>Endless Run</title>
+<style>
+  :root{
+    --bg:#0b1020;
+    --fg:#e7ecf3;
+    --accent:#74ffd6;
+    --danger:#ff6289;
+    --panel:rgba(255,255,255,0.06);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background: radial-gradient(1200px 800px at 70% -10%, #17223f 0%, #0b1020 60%, #070b16 100%);
+    color:var(--fg);
+    font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;
+  }
+  #hud{
+    position:fixed; inset:16px auto auto 16px; z-index:10;
+    display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  }
+  .chip{
+    background:var(--panel); border:1px solid rgba(255,255,255,.12);
+    padding:.5rem .75rem; border-radius:999px;
+    backdrop-filter: blur(6px);
+    font-weight:600; letter-spacing:.2px;
+  }
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px}
+  .ok{background:var(--accent)} .bad{background:var(--danger)}
+  #area{position:fixed; inset:0; cursor:none;}
+  #overlay{
+    position:fixed; inset:0; display:grid; place-items:center; z-index:20;
+    background: linear-gradient(180deg, rgba(7,11,22,.65), rgba(7,11,22,.85));
+    opacity:0; pointer-events:none; transition:opacity .25s ease;
+  }
+  #overlay.show{opacity:1; pointer-events:auto}
+  .card{
+    background:rgba(17,24,39,.6);
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:20px; padding:24px; max-width:620px; width:min(92vw,620px);
+    box-shadow: 0 10px 40px rgba(0,0,0,.45);
+    text-align:center;
+  }
+  h1{margin:.2rem 0 0; font-size:28px}
+  p{opacity:.9}
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center;
+    padding:.8rem 1.1rem; border-radius:14px; border:1px solid rgba(255,255,255,.15);
+    background:linear-gradient(180deg,rgba(116,255,214,.22),rgba(116,255,214,.12));
+    color:#061016; font-weight:800; letter-spacing:.3px; text-transform:uppercase;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 6px 22px rgba(116,255,214,.2);
+    cursor:pointer; transition: transform .06s ease;
+  }
+  .btn:active{ transform: translateY(1px) }
+  .fine{font-size:12px; opacity:.8; margin-top:10px}
+  .skills{display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin:12px 0}
+  .skill-opt{cursor:pointer; padding:12px 14px; border-radius:14px; border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.06)}
+  .skill-opt:hover{outline:2px solid var(--accent)}
+  .kbd{padding:2px 6px; border-radius:6px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.15); font-weight:700}
+  @media (pointer:coarse){ #area{cursor:default} }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <div class="chip"><span class="dot ok"></span><span id="score">Điểm: 0</span></div>
+    <div class="chip"><span class="dot"></span><span id="time">Sống: 0.0s</span></div>
+    <div class="chip"><span class="dot"></span><span id="hi">Kỷ lục: 0</span></div>
+    <div class="chip">🌊 Wave: <span id="wave">0/10</span></div>
+    <div class="chip">⚡ Skill (<span class="kbd">E</span>): <span id="skillStatus">Đang hồi</span></div>
+  </div>
+<canvas id="area"></canvas>
+
+  <div id="overlay" class="show">
+    <div class="card" id="menuCard">
+      <div style="font-size:48px">🖱️🏃‍♂️</div>
+      <h1>Endless Run</h1>
+      <p>
+        Di chuyển chuột/ngón tay để né. Đụng là thua!<br>
+        +50 điểm mỗi 10s sống. Mỗi 5s có thêm quái (tăng dần theo wave).<br>
+        Chọn <b>1 kỹ năng</b>, ấn <span class="kbd">E</span> để kích hoạt (CD 30s). Mỗi wave vượt qua sẽ <b>nâng cấp</b> kỹ năng.
+      </p>
+      <div style="margin:10px 0 6px; opacity:.9">Chọn kỹ năng:</div>
+      <div class="skills" id="skillChoices">
+        <div class="skill-opt" data-skill="orb">🔮 Orb bảo vệ<br><small>Quanh người, chạm quái sẽ phá quái</small></div>
+        <div class="skill-opt" data-skill="freeze">❄️ Đóng băng<br><small>Dừng toàn bộ quái trong thời gian ngắn</small></div>
+        <div class="skill-opt" data-skill="explosion">💥 Bùng nổ<br><small>Tiêu diệt nhanh nhiều quái xung quanh</small></div>
+      </div>
+      <button id="startBtn" class="btn" disabled>Bắt đầu</button>
+      <div class="fine">Mẹo: dùng skill đúng lúc để lật kèo.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ===== Canvas & HUD =====
+  const cvs = document.getElementById('area');
+  const ctx = cvs.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const menuCard = document.getElementById('menuCard');
+  const scoreEl = document.getElementById('score');
+  const timeEl  = document.getElementById('time');
+  const hiEl    = document.getElementById('hi');
+  const skillEl = document.getElementById('skillStatus');
+  const waveEl  = document.getElementById('wave');
+  const choices = document.getElementById('skillChoices');
+
+  let W = 0, H = 0;
+  function resize(){ W=cvs.width=innerWidth; H=cvs.height=innerHeight; }
+  addEventListener('resize',resize); resize();
+
+  // ===== Audio (WebAudio, không cần file) =====
+  const SND = (() => {
+    const ctxA = new (window.AudioContext||window.webkitAudioContext)();
+    const master = ctxA.createGain(); master.gain.value = 0.5; master.connect(ctxA.destination);
+
+    const busBgm = ctxA.createGain(); busBgm.gain.value = 0.25; busBgm.connect(master);
+    const busSfx = ctxA.createGain(); busSfx.gain.value = 0.9;  busSfx.connect(master);
+
+    // Nhạc nền: pad bằng noise + filter
+    let bgmNodes = null;
+    function bgmStart(){
+      if(bgmNodes) return;
+      const noise = ctxA.createBufferSource();
+      const buffer = ctxA.createBuffer(1, ctxA.sampleRate*2, ctxA.sampleRate);
+      const data = buffer.getChannelData(0);
+      for(let i=0;i<data.length;i++) data[i] = (Math.random()*2-1)*0.02;
+      noise.buffer = buffer; noise.loop = true;
+
+      const filt = ctxA.createBiquadFilter(); filt.type='lowpass'; filt.frequency.value=600;
+      const lfo = ctxA.createOscillator(); lfo.frequency.value=0.07;
+      const lfoGain = ctxA.createGain(); lfoGain.gain.value=300;
+      lfo.connect(lfoGain).connect(filt.frequency);
+
+      const pad = ctxA.createOscillator(); pad.type='sawtooth'; pad.frequency.value=110; // A2
+      const padGain = ctxA.createGain(); padGain.gain.value=0.02;
+
+      noise.connect(filt).connect(busBgm);
+      pad.connect(padGain).connect(busBgm);
+
+      noise.start(); pad.start(); lfo.start();
+      bgmNodes = {noise, pad, lfo, padGain, filt};
+    }
+    function bgmStop(){
+      if(!bgmNodes) return;
+      try{bgmNodes.noise.stop(); bgmNodes.pad.stop(); bgmNodes.lfo.stop();}catch{}
+      bgmNodes=null;
+    }
+    // SFX tiện ích
+    function beep(freq=440, dur=0.12, type='sine', vol=0.6){
+      const o=ctxA.createOscillator(); o.type=type; o.frequency.value=freq;
+      const g=ctxA.createGain(); g.gain.value=vol;
+      o.connect(g).connect(busSfx); o.start(); g.gain.exponentialRampToValueAtTime(0.0001, ctxA.currentTime+dur); o.stop(ctxA.currentTime+dur);
+    }
+    function clickDown(){ beep(220,0.05,'square',0.4) }
+    function spawn(){ beep(740,0.06,'triangle',0.35) }
+    function kill(){ beep(330,0.08,'sine',0.5) }
+    function orbCreate(){ beep(880,0.12,'triangle',0.5); setTimeout(()=>beep(1320,0.08,'sine',0.4),60); }
+    function orbBreak(){ beep(500,0.06,'square',0.4) }
+    function freeze(){ beep(300,0.1,'sine',0.5); setTimeout(()=>beep(200,0.2,'sine',0.3),70) }
+    function explode(){ beep(160,0.2,'sawtooth',0.7); setTimeout(()=>beep(90,0.15,'triangle',0.5),90) }
+    function levelUp(){ beep(660,0.08,'sine',0.5); setTimeout(()=>beep(990,0.08,'sine',0.5),80) }
+    function gameWin(){ [523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,0.12,'sine',0.6), i*120)) }
+    function gameOver(){ [392,294,220].forEach((f,i)=>setTimeout(()=>beep(f,0.18,'sawtooth',0.6), i*140)) }
+
+    return {ctxA,bgmStart,bgmStop,clickDown,spawn,kill,orbCreate,orbBreak,freeze,explode,levelUp,gameWin,gameOver};
+  })();
+
+  // ===== Game State =====
+  const enemies=[]; 
+  const player={x:W/2,y:H/2,r:12};
+  let running=false, lastTime=0,elapsed=0,score=0;
+  let lastAwardAt=0,lastSpawnAt=0;
+  let hiScore=+localStorage.getItem('mouse_dodge_hi')||0;
+  hiEl.textContent=`Kỷ lục: ${hiScore}`;
+
+  // Waves
+  const WAVE_LEN = 50000; // 50s
+  const TOTAL_WAVES = 10;
+  let waveIdx = 0; // 1..10
+  let waveStartTime = 0;
+
+  // Spawn / speed config (tăng theo wave)
+  const BASE_SPAWN = 5000; // ms (giảm dần theo wave)
+  const BASE_SPEED = 1.2, SPEED_GROW=0.00008, enemySize=28;
+
+  // Skill system
+  const SKILL_CD=30000; // 30s
+  let selectedSkill = null; // 'orb' | 'freeze' | 'explosion'
+  let skillLevel = 0; // 0..max
+  let skillReady=false,lastSkillAt=-SKILL_CD;
+  let orbs=[]; // cho skill orb
+  let frozenUntil = 0; // cho skill freeze
+
+  // Pointer
+  let hasPointer=false;
+  function setPlayer(e){let x,y;if(e.touches){x=e.touches[0].clientX;y=e.touches[0].clientY;}else{x=e.clientX;y=e.clientY;}
+    player.x=x;player.y=y;hasPointer=true;}
+  addEventListener('mousemove',setPlayer); addEventListener('touchmove',setPlayer);
+  addEventListener('touchstart',setPlayer);
+
+  // Enemy types
+  const TYPES = [
+    {emoji:"😈", spd:1.0, hp:1},
+    {emoji:"😡", spd:1.5, hp:1},
+    {emoji:"👻", spd:2.0, hp:1},
+    {emoji:"🤖", spd:0.8, hp:2},
+  ];
+
+  function spawnEnemy(){
+    let tries=0;
+    while(tries<30){ // tránh chồng lên
+      tries++;
+      const edge=Math.floor(Math.random()*4);let x,y;
+      if(edge===0){x=Math.random()*W;y=-40}
+      if(edge===1){x=W+40;y=Math.random()*H}
+      if(edge===2){x=Math.random()*W;y=H+40}
+      if(edge===3){x=-40;y=Math.random()*H}
+      let ok=true;
+      for(let e of enemies){
+        if(Math.hypot(x-e.x,y-e.y)<40){ok=false;break;}
+      }
+      if(ok){
+        // pick type theo wave: càng cao càng có cơ hội quái nhanh/trâu
+        const tBias = Math.min(0.75, (waveIdx-1)/TOTAL_WAVES); // 0..0.75
+        const pool = Math.random()<tBias ? TYPES.slice(1) : TYPES;
+        const T = pool[Math.random()*pool.length|0];
+        enemies.push({x,y,emoji:T.emoji,r:16,hp:T.hp,spdMul:T.spd});
+        SND.spawn();
+        break;
+      }
+    }
+  }
+
+  // ===== UI: Chọn skill =====
+  choices.addEventListener('click', (e)=>{
+    const opt = e.target.closest('.skill-opt'); if(!opt) return;
+    [...choices.children].forEach(n=>n.style.outline='none');
+    opt.style.outline=`2px solid var(--accent)`;
+    selectedSkill = opt.dataset.skill;
+    startBtn.disabled = false;
+    SND.clickDown();
+  });
+
+  // ===== Skill params theo level =====
+  function getSkillParams(){
+    if(selectedSkill==='orb'){
+      // Lv0:4, Lv1:6, Lv2:8, Lv3:9, LvMax:10
+      const table=[4,6,8,9,10];
+      return {count: table[Math.min(skillLevel,4)], radius: 60};
+    }
+    if(selectedSkill==='freeze'){
+      // 1s,2s,3s,5s,7s
+      const table=[1000,2000,3000,5000,7000];
+      return {duration: table[Math.min(skillLevel,4)]};
+    }
+    if(selectedSkill==='explosion'){
+      // 5,7,9,11,15
+      const table=[5,7,9,11,15];
+      return {kills: table[Math.min(skillLevel,4)], radius: 140};
+    }
+    return {};
+  }
+
+  function resetGame(){
+    enemies.length=0; orbs.length=0;
+    elapsed=score=0; lastAwardAt=lastSpawnAt=0; frozenUntil=0;
+    player.x=W/2; player.y=H/2; hasPointer=false;
+    lastSkillAt=-SKILL_CD; skillReady=false;
+    waveIdx=1; waveStartTime=0;
+  }
+
+  function start(){
+    if(!selectedSkill){ return; }
+    resetGame(); running=true;
+    overlay.classList.remove('show');
+    lastTime=performance.now();
+    waveStartTime=0;
+    SND.bgmStart();
+    requestAnimationFrame(loop);
+  }
+
+  function winGame(){
+    running=false;
+    SND.gameWin();
+    if(score>hiScore){hiScore=score;localStorage.setItem('mouse_dodge_hi',hiScore);}
+    hiEl.textContent=`Kỷ lục: ${hiScore}`;
+    startBtn.textContent='Chơi lại';
+    document.querySelector('#menuCard h1').textContent='Bạn đã chiến thắng!';
+    document.querySelector('#menuCard p').innerHTML='Vượt qua 10 wave. Thử kỹ năng khác chứ?';
+    overlay.classList.add('show');
+  }
+
+  function gameOver(){
+    running=false; SND.gameOver(); SND.bgmStop();
+    if(score>hiScore){hiScore=score;localStorage.setItem('mouse_dodge_hi',hiScore);}
+    hiEl.textContent=`Kỷ lục: ${hiScore}`;
+    startBtn.textContent='Chơi lại';
+    document.querySelector('#menuCard h1').textContent='Game Over';
+    document.querySelector('#menuCard p').innerHTML='Đụng quái là thua! Chọn kỹ năng khác để thử lại.';
+    overlay.classList.add('show');
+  }
+
+  function drawPlayer(){
+    // trail nhỏ
+    ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+    ctx.fillStyle='rgba(116,255,214,0.95)';ctx.shadowColor='rgba(116,255,214,0.6)';ctx.shadowBlur=14;ctx.fill();
+    ctx.shadowBlur=0;ctx.beginPath();ctx.arc(player.x,player.y,3,0,Math.PI*2);ctx.fillStyle='#061016';ctx.fill();
+  }
+
+  function drawEnemy(e){
+    ctx.font=`${enemySize}px system-ui, Apple Color Emoji, Segoe UI Emoji`;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(e.emoji,e.x,e.y);
+    if(e.hp>1){
+      // viền máu nhẹ
+      ctx.beginPath();ctx.arc(e.x,e.y,e.r+8,0,Math.PI*2);
+      ctx.strokeStyle='rgba(255,255,255,.07)';ctx.lineWidth=2;ctx.stroke();
+    }
+  }
+
+  // ===== Skill actions =====
+  function activateSkill(){
+    if(!skillReady || !selectedSkill) return;
+    skillReady=false; lastSkillAt=elapsed;
+
+    if(selectedSkill==='orb'){
+      const p = getSkillParams();
+      orbs.length=0;
+      for(let i=0;i<p.count;i++){
+        orbs.push({angle:(i/p.count)*Math.PI*2, radius:p.radius});
+      }
+      SND.orbCreate();
+    } else if(selectedSkill==='freeze'){
+      const p = getSkillParams();
+      frozenUntil = elapsed + p.duration;
+      SND.freeze();
+    } else if(selectedSkill==='explosion'){
+      const p = getSkillParams();
+      // tiêu diệt tối đa p.kills quái gần player trong bán kính p.radius
+      const withDist = enemies.map((e,idx)=>({idx, d:Math.hypot(e.x-player.x,e.y-player.y)}))
+                              .sort((a,b)=>a.d-b.d);
+      let killed=0;
+      for(const it of withDist){
+        if(killed>=p.kills) break;
+        if(withDist.length===0) break;
+        if(it.d<=p.radius){
+          enemies.splice(it.idx - (killed),1); // bù chỉ số do splice
+          killed++;
+        }
+      }
+      if(killed===0 && enemies.length){
+        // nếu không có trong bán kính, giết gần nhất 1-2 con cho đã tay
+        const k = Math.min(p.kills, Math.min(2,enemies.length));
+        enemies.splice(withDist[0].idx,1);
+        if(k>1 && enemies.length) enemies.splice((withDist[1]?.idx||0)-1,1);
+      }
+      if(killed>0) SND.explode(); else SND.clickDown();
+    }
+  }
+
+  function drawOrbs(dt){
+    if(orbs.length===0) return;
+    const speed=0.002*dt; 
+    for(let i=orbs.length-1;i>=0;i--){
+      let o=orbs[i];
+      o.angle+=speed;
+      const ox=player.x+Math.cos(o.angle)*o.radius;
+      const oy=player.y+Math.sin(o.angle)*o.radius;
+      ctx.beginPath();ctx.arc(ox,oy,8,0,Math.PI*2);
+      ctx.fillStyle="rgba(116,255,214,0.9)";ctx.fill();
+
+      // check va chạm với quái
+      for(let j=enemies.length-1;j>=0;j--){
+        let e=enemies[j];
+        if(Math.hypot(ox-e.x,oy-e.y)<e.r+8){
+          e.hp-=1;
+          if(e.hp<=0){ enemies.splice(j,1); SND.kill(); }
+          orbs.splice(i,1); SND.orbBreak();
+          break;
+        }
+      }
+    }
+  }
+
+  function waveSpawnInterval(){
+    // Giảm thời gian spawn theo wave (nhanh hơn)
+    const factor = 1 - Math.min(0.7, (waveIdx-1)*0.06); // từ 1.0 -> ~0.4
+    return Math.max(900, BASE_SPAWN*factor);
+  }
+
+  function enemySpeedMul(e, baseBonus){
+    // tốc độ quái: base * spdMul * (tăng theo thời gian)
+    return BASE_SPEED * e.spdMul * baseBonus;
+  }
+
+  function loop(now){
+    if(!running) return;
+    const dt=Math.min(40,now-lastTime); lastTime=now; elapsed+=dt;
+
+    // Wave logic
+    if(waveStartTime===0) waveStartTime = elapsed;
+    const waveElapsed = elapsed - waveStartTime;
+    if(waveElapsed >= WAVE_LEN){
+      // qua wave
+      if(waveIdx >= TOTAL_WAVES){
+        winGame();
+        return;
+      } else {
+        waveIdx++;
+        waveStartTime = elapsed;
+        skillLevel = Math.min(4, skillLevel+1); // tăng level (max)
+        SND.levelUp();
+      }
+    }
+    waveEl.textContent = `${waveIdx}/${TOTAL_WAVES}`;
+
+    // Spawn theo wave
+    const SPAWN_EVERY = waveSpawnInterval();
+    if(elapsed-lastSpawnAt>=SPAWN_EVERY){ spawnEnemy(); lastSpawnAt=elapsed; }
+
+    // Award điểm theo thời gian
+    const AWARD_EVERY=10000;
+    while(elapsed-lastAwardAt>=AWARD_EVERY){ score+=50; lastAwardAt+=AWARD_EVERY; }
+
+    // Skill cooldown
+    if(elapsed-lastSkillAt>=SKILL_CD){ skillReady=true; }
+    skillEl.textContent=skillReady?"Sẵn sàng":"Đang hồi";
+
+    // Vẽ nền
+    ctx.clearRect(0,0,W,H);
+    const grd=ctx.createRadialGradient(player.x,player.y,20,player.x,player.y,Math.max(W,H));
+    grd.addColorStop(0,'rgba(116,255,214,0.08)');grd.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=grd;ctx.fillRect(0,0,W,H);
+
+    // Nếu đang freeze, phủ lớp lam mờ
+    const isFrozen = elapsed < frozenUntil;
+    if(isFrozen){
+      ctx.fillStyle='rgba(80,180,255,0.08)';
+      ctx.fillRect(0,0,W,H);
+    }
+
+    // Cập nhật quái
+    const speedBonus=1+elapsed*SPEED_GROW + (waveIdx-1)*0.12;
+    for(let i=0;i<enemies.length;i++){
+      const e=enemies[i];
+      if(!isFrozen){
+        const dx=player.x-e.x, dy=player.y-e.y;
+        const dist=Math.hypot(dx,dy)||1;
+        const spd=enemySpeedMul(e,speedBonus);
+        e.x+=dx/dist*spd*(dt/16.6); e.y+=dy/dist*spd*(dt/16.6);
+      }
+      drawEnemy(e);
+      if(Math.hypot(player.x-e.x,player.y-e.y)<=player.r+e.r){ gameOver(); return; }
+    }
+
+    // Orbs & Player
+    drawOrbs(dt);
+    drawPlayer();
+
+    // HUD
+    scoreEl.textContent=`Điểm: ${score}`;
+    timeEl.textContent=`Sống: ${(elapsed/1000).toFixed(1)}s`;
+
+    // Hint khi chưa di chuyển
+    if(!hasPointer){
+      ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(0,0,380,50);
+      ctx.fillStyle='#fff';ctx.font='14px ui-sans-serif';
+      ctx.fillText('👉 Di chuyển chuột/ngón tay để bắt đầu điều khiển',10,25);
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  // ===== Events =====
+  startBtn.onclick=()=>{ SND.clickDown(); start(); };
+  overlay.onclick=e=>{ if(e.target===overlay){ if(startBtn.disabled) return; start(); } };
+  addEventListener('keydown',e=>{
+    if(e.code==='KeyE') activateSkill();
+  });
+
+})();
+</script>
+</body>
+</html>
