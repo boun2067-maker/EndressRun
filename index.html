@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<title>Endless Run</title>
+<style>
+  :root{
+    --bg:#0b1020;
+    --fg:#e7ecf3;
+    --accent:#74ffd6;
+    --danger:#ff6289;
+    --panel:rgba(255,255,255,0.06);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background: radial-gradient(1200px 800px at 70% -10%, #17223f 0%, #0b1020 60%, #070b16 100%);
+    color:var(--fg);
+    font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;
+  }
+  #hud{
+    position:fixed; inset:16px auto auto 16px; z-index:10;
+    display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  }
+  .chip{
+    background:var(--panel); border:1px solid rgba(255,255,255,.12);
+    padding:.5rem .75rem; border-radius:999px;
+    backdrop-filter: blur(6px);
+    font-weight:600; letter-spacing:.2px;
+  }
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px}
+  .ok{background:var(--accent)} .bad{background:var(--danger)}
+  #area{position:fixed; inset:0; cursor:none;}
+  #overlay{
+    position:fixed; inset:0; display:grid; place-items:center; z-index:20;
+    background: linear-gradient(180deg, rgba(7,11,22,.65), rgba(7,11,22,.85));
+    opacity:0; pointer-events:none; transition:opacity .25s ease;
+  }
+  #overlay.show{opacity:1; pointer-events:auto}
+  .card{
+    background:rgba(17,24,39,.6);
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:20px; padding:24px; max-width:520px; width:min(92vw,520px);
+    box-shadow: 0 10px 40px rgba(0,0,0,.45);
+    text-align:center;
+  }
+  h1{margin:.2rem 0 0; font-size:28px}
+  p{opacity:.9}
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center;
+    padding:.8rem 1.1rem; border-radius:14px; border:1px solid rgba(255,255,255,.15);
+    background:linear-gradient(180deg,rgba(116,255,214,.22),rgba(116,255,214,.12));
+    color:#061016; font-weight:800; letter-spacing:.3px; text-transform:uppercase;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 6px 22px rgba(116,255,214,.2);
+    cursor:pointer; transition: transform .06s ease;
+  }
+  .btn:active{ transform: translateY(1px) }
+  .fine{font-size:12px; opacity:.8; margin-top:10px}
+  @media (pointer:coarse){ #area{cursor:default} }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <div class="chip"><span class="dot ok"></span><span id="score">Điểm: 0</span></div>
+    <div class="chip"><span class="dot"></span><span id="time">Sống: 0.0s</span></div>
+    <div class="chip"><span class="dot"></span><span id="hi">Kỷ lục: 0</span></div>
+    <div class="chip">⏱️ +👾 mỗi 5s</div>
+    <div class="chip">👹 Boss mỗi 300 điểm</div>
+    <div class="chip">⚡ Skill: <span id="skillStatus">Đang hồi</span></div>
+  </div>
+<canvas id="area"></canvas>
+
+  <div id="overlay" class="show">
+    <div class="card">
+      <div style="font-size:48px">🖱️🏃‍♂️</div>
+      <h1>Endless Run</h1>
+      <p>Di chuyển chuột/ngón tay để né. Đụng là thua!<br>
+         +50 điểm mỗi 10s sống. <br>
+         Mỗi 5s có thêm quái, mỗi 300 điểm có boss.<br>
+         <b>Kỹ năng (Space):</b> tiêu diệt tất cả quái mỗi 60s.</p>
+      <button id="startBtn" class="btn">Bắt đầu</button>
+      <div class="fine">Mẹo: canh skill để cứu nguy.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const cvs = document.getElementById('area');
+  const ctx = cvs.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const scoreEl = document.getElementById('score');
+  const timeEl  = document.getElementById('time');
+  const hiEl    = document.getElementById('hi');
+  const skillEl = document.getElementById('skillStatus');
+
+  let W = 0, H = 0;
+  function resize(){ W=cvs.width=innerWidth; H=cvs.height=innerHeight; }
+  window.addEventListener('resize',resize); resize();
+
+  const EMOJIS = ["👾","😈","🧟","👻","🤖","🐍"];
+  const BOSS_EMOJIS = ["👹","🐉","🦖"];
+  const enemies=[]; 
+  const player={x:W/2,y:H/2,r:12};
+  let running=false, lastTime=0,elapsed=0,score=0;
+  let lastAwardAt=0,lastSpawnAt=0;
+  let hiScore=+localStorage.getItem('mouse_dodge_hi')||0;
+  hiEl.textContent=`Kỷ lục: ${hiScore}`;
+
+  // Boss
+  let inBossFight = false;
+  let bossFightStart = 0;
+  let boss = null;
+  let projectiles = [];
+
+  // Config
+  const SPAWN_EVERY=5000, AWARD_EVERY=10000;
+  const BASE_SPEED=1.2,SPEED_GROW=0.00008,enemySize=28;
+
+  // Skill
+  const SKILL_CD=60000; // 60s
+  let skillReady=false,lastSkillAt=-SKILL_CD;
+
+  // Pointer
+  let hasPointer=false;
+  function setPlayer(e){let x,y;if(e.touches){x=e.touches[0].clientX;y=e.touches[0].clientY;}else{x=e.clientX;y=e.clientY;}
+    player.x=x;player.y=y;hasPointer=true;}
+  addEventListener('mousemove',setPlayer); addEventListener('touchmove',setPlayer);
+  addEventListener('touchstart',setPlayer);
+
+  function spawnEnemy(){
+    const edge=Math.floor(Math.random()*4);let x,y;
+    if(edge===0){x=Math.random()*W;y=-40}
+    if(edge===1){x=W+40;y=Math.random()*H}
+    if(edge===2){x=Math.random()*W;y=H+40}
+    if(edge===3){x=-40;y=Math.random()*H}
+    enemies.push({x,y,emoji:EMOJIS[Math.random()*EMOJIS.length|0],r:16,boss:false});
+  }
+
+  // Boss Fight
+  function startBossFight() {
+    inBossFight = true;
+    bossFightStart = elapsed;
+    projectiles.length = 0;
+    boss = {x: W/2, y: 100, r: 40, emoji:"👹", speed:4, lastShoot:0};
+  }
+  function updateBoss(dt) {
+    if (!boss) return;
+    boss.x += boss.speed * (dt/16);
+    if (boss.x < 60 || boss.x > W-60) boss.speed *= -1;
+
+    if (elapsed - boss.lastShoot >= 2000) {
+      boss.lastShoot = elapsed;
+      const dx = player.x - boss.x, dy = player.y - boss.y;
+      const dist = Math.hypot(dx,dy) || 1;
+      projectiles.push({x: boss.x, y: boss.y, vx: dx/dist*5, vy: dy/dist*5, r:8});
+    }
+
+    for (let i=projectiles.length-1;i>=0;i--){
+      let p=projectiles[i];
+      p.x += p.vx*(dt/16);
+      p.y += p.vy*(dt/16);
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle="rgba(255,100,150,0.9)";
+      ctx.fill();
+      if (Math.hypot(p.x-player.x,p.y-player.y) < p.r+player.r){ gameOver(); return; }
+    }
+
+    ctx.font="64px system-ui, Apple Color Emoji";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.fillText(boss.emoji,boss.x,boss.y);
+
+    if (elapsed - bossFightStart >= 45000) {
+      score += 100;
+      inBossFight = false;
+      boss = null;
+      projectiles.length=0;
+    }
+  }
+
+  function resetGame(){enemies.length=0;elapsed=score=0;lastAwardAt=lastSpawnAt=0;
+    player.x=W/2;player.y=H/2;hasPointer=false;lastSkillAt=-SKILL_CD;skillReady=false;inBossFight=false;boss=null;}
+
+  function start(){resetGame();running=true;overlay.classList.remove('show');lastTime=performance.now();requestAnimationFrame(loop);}
+  function gameOver(){running=false;if(score>hiScore){hiScore=score;localStorage.setItem('mouse_dodge_hi',hiScore);}
+    hiEl.textContent=`Kỷ lục: ${hiScore}`;startBtn.textContent='Chơi lại';overlay.classList.add('show');}
+
+  function drawPlayer(){ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+    ctx.fillStyle='rgba(116,255,214,0.95)';ctx.shadowColor='rgba(116,255,214,0.6)';ctx.shadowBlur=14;ctx.fill();
+    ctx.shadowBlur=0;ctx.beginPath();ctx.arc(player.x,player.y,3,0,Math.PI*2);ctx.fillStyle='#061016';ctx.fill();}
+
+  function drawEnemy(e){ctx.font=`${e.boss?56:enemySize}px system-ui, Apple Color Emoji, Segoe UI Emoji`;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(e.emoji,e.x,e.y);}
+
+  function activateSkill(){
+    if(!skillReady)return;
+    enemies.length=0;
+    skillReady=false; lastSkillAt=elapsed;
+  }
+
+  function loop(now){
+    if(!running)return;
+    const dt=Math.min(40,now-lastTime);lastTime=now;elapsed+=dt;
+
+    if (!inBossFight && score > 0 && score % 300 === 0) {
+      startBossFight();
+    }
+
+    if (inBossFight) {
+      ctx.clearRect(0,0,W,H);
+      updateBoss(dt);
+      drawPlayer();
+      scoreEl.textContent=`Điểm: ${score}`;
+      timeEl.textContent=`Sống: ${(elapsed/1000).toFixed(1)}s`;
+      requestAnimationFrame(loop);
+      return;
+    }
+
+    if(elapsed-lastSpawnAt>=SPAWN_EVERY){spawnEnemy();lastSpawnAt=elapsed;}
+    while(elapsed-lastAwardAt>=AWARD_EVERY){score+=50;lastAwardAt+=AWARD_EVERY;}
+
+    if(elapsed-lastSkillAt>=SKILL_CD){skillReady=true;}
+    skillEl.textContent=skillReady?"Sẵn sàng":"Đang hồi";
+
+    ctx.clearRect(0,0,W,H);
+    const grd=ctx.createRadialGradient(player.x,player.y,20,player.x,player.y,Math.max(W,H));
+    grd.addColorStop(0,'rgba(116,255,214,0.08)');grd.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=grd;ctx.fillRect(0,0,W,H);
+
+    const speedBonus=1+elapsed*SPEED_GROW;
+    for(let i=0;i<enemies.length;i++){
+      const e=enemies[i];const dx=player.x-e.x,dy=player.y-e.y;
+      const dist=Math.hypot(dx,dy)||1;
+      const spd=(e.boss?BASE_SPEED*0.8:BASE_SPEED)*speedBonus*(1.2+i*0.02);
+      e.x+=dx/dist*spd*(dt/16.6); e.y+=dy/dist*spd*(dt/16.6);
+      drawEnemy(e);
+      if(dist<=player.r+e.r){gameOver();return;}
+    }
+    drawPlayer();
+    scoreEl.textContent=`Điểm: ${score}`;
+    timeEl.textContent=`Sống: ${(elapsed/1000).toFixed(1)}s`;
+    if(!hasPointer){ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(0,0,360,50);
+      ctx.fillStyle='#fff';ctx.font='14px ui-sans-serif';ctx.fillText('👉 Di chuyển để bắt đầu điều khiển',10,25);}
+    requestAnimationFrame(loop);
+  }
+
+  startBtn.onclick=start;
+  overlay.onclick=e=>{if(e.target===overlay)start();}
+  addEventListener('keydown',e=>{if(e.code==='Space')activateSkill();});
+})();
+</script>
+</body>
+</html>
